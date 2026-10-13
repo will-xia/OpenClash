@@ -1,0 +1,493 @@
+# ============================================================
+# OpenClash / Mihomo 多订阅统一分流 - 全套版
+#
+# 特点：
+# - 多订阅统一策略组
+# - 开发、AI、Google、微软、Telegram、流媒体、游戏独立出口
+# - 使用远程 text 格式规则集
+# - 国内域名与中国大陆 IP 默认直连
+#
+# 注意：
+# - 本文件用于 OpenClash「自定义覆写 YAML」
+# - 第一次启用时请观察 OpenClash 日志中的规则集下载状态
+# ============================================================
+
+# ------------------------------------------------------------
+# 基本运行项
+# ------------------------------------------------------------
+mixed-port: 7890
+allow-lan: true
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+
+# 可选：仅允许 LAN 访问，禁止从 WAN 放行 9090
+external-controller: "0.0.0.0:9090"
+secret: "CHANGE_THIS_TO_A_LONG_RANDOM_SECRET"
+
+# ------------------------------------------------------------
+# 策略组
+# ------------------------------------------------------------
+proxy-groups:
+
+  # 全局默认代理出口
+  - name: "🚀 PROXY"
+    type: select
+    proxies:
+      - "⚡ AUTO"
+      - "💻 DEV"
+      - "🤖 AI"
+      - "🔍 GOOGLE"
+      - "🪟 MICROSOFT"
+      - "✈️ TELEGRAM"
+      - "🎬 STREAM"
+      - "🎮 GAME"
+      - "🇭🇰 HK"
+      - "🇯🇵 JP"
+      - "🇸🇬 SG"
+      - "🇹🇼 TW"
+      - "🇺🇸 US"
+      - "🌍 GLOBAL"
+      - "DIRECT"
+    include-all: true
+
+  # 所有订阅节点自动测速
+  - name: "⚡ AUTO"
+    type: url-test
+    include-all: true
+    url: "https://www.gstatic.com/generate_204"
+    interval: 300
+    tolerance: 80
+    lazy: true
+    exclude-filter: "(?i)(剩余|到期|官网|流量|套餐|续费|客服|公告|更新|订阅|test)"
+
+  # 全部节点手动选择
+  - name: "🌍 GLOBAL"
+    type: select
+    include-all: true
+    proxies:
+      - "DIRECT"
+
+  # 地区节点池
+  - name: "🇭🇰 HK"
+    type: url-test
+    include-all: true
+    filter: "(?i)(港|hk|hong[ -]?kong)"
+    url: "https://www.gstatic.com/generate_204"
+    interval: 300
+    tolerance: 80
+    lazy: true
+
+  - name: "🇯🇵 JP"
+    type: url-test
+    include-all: true
+    filter: "(?i)(日|jp|japan|tokyo|osaka)"
+    url: "https://www.gstatic.com/generate_204"
+    interval: 300
+    tolerance: 80
+    lazy: true
+
+  - name: "🇸🇬 SG"
+    type: url-test
+    include-all: true
+    filter: "(?i)(新加坡|狮城|sg|singapore)"
+    url: "https://www.gstatic.com/generate_204"
+    interval: 300
+    tolerance: 80
+    lazy: true
+
+  - name: "🇹🇼 TW"
+    type: url-test
+    include-all: true
+    filter: "(?i)(台|tw|taiwan)"
+    url: "https://www.gstatic.com/generate_204"
+    interval: 300
+    tolerance: 80
+    lazy: true
+
+  - name: "🇺🇸 US"
+    type: url-test
+    include-all: true
+    filter: "(?i)(美|us|united[ -]?states|america|los[ -]?angeles|san[ -]?jose|seattle|silicon[ -]?valley)"
+    url: "https://www.gstatic.com/generate_204"
+    interval: 300
+    tolerance: 80
+    lazy: true
+
+  # GitHub、Docker、软件包、代码托管
+  - name: "💻 DEV"
+    type: select
+    proxies:
+      - "⚡ AUTO"
+      - "🇯🇵 JP"
+      - "🇸🇬 SG"
+      - "🇺🇸 US"
+      - "🌍 GLOBAL"
+      - "DIRECT"
+    include-all: true
+
+  # OpenAI、Claude、Gemini 等
+  - name: "🤖 AI"
+    type: select
+    proxies:
+      - "🇺🇸 US"
+      - "🇯🇵 JP"
+      - "🇸🇬 SG"
+      - "⚡ AUTO"
+      - "🌍 GLOBAL"
+    include-all: true
+
+  # Google / YouTube
+  - name: "🔍 GOOGLE"
+    type: select
+    proxies:
+      - "⚡ AUTO"
+      - "🇭🇰 HK"
+      - "🇯🇵 JP"
+      - "🇸🇬 SG"
+      - "🇺🇸 US"
+      - "🌍 GLOBAL"
+      - "DIRECT"
+    include-all: true
+
+  # Microsoft / Azure / VS Code / Copilot
+  - name: "🪟 MICROSOFT"
+    type: select
+    proxies:
+      - "⚡ AUTO"
+      - "🇯🇵 JP"
+      - "🇸🇬 SG"
+      - "🇺🇸 US"
+      - "🌍 GLOBAL"
+      - "DIRECT"
+    include-all: true
+
+  # Telegram
+  - name: "✈️ TELEGRAM"
+    type: select
+    proxies:
+      - "⚡ AUTO"
+      - "🇭🇰 HK"
+      - "🇯🇵 JP"
+      - "🇸🇬 SG"
+      - "🇺🇸 US"
+      - "🌍 GLOBAL"
+    include-all: true
+
+  # 流媒体：建议在 LuCI 中手动选择实际可解锁的地区节点
+  - name: "🎬 STREAM"
+    type: select
+    proxies:
+      - "🇺🇸 US"
+      - "🇯🇵 JP"
+      - "🇸🇬 SG"
+      - "🇭🇰 HK"
+      - "⚡ AUTO"
+      - "🌍 GLOBAL"
+      - "DIRECT"
+    include-all: true
+
+  # 游戏：默认直连，必要时切换至相应地区节点
+  - name: "🎮 GAME"
+    type: select
+    proxies:
+      - "DIRECT"
+      - "🇭🇰 HK"
+      - "🇯🇵 JP"
+      - "🇸🇬 SG"
+      - "🇺🇸 US"
+      - "⚡ AUTO"
+      - "🌍 GLOBAL"
+    include-all: true
+
+  # Apple/iCloud：默认直连
+  - name: "🍎 APPLE"
+    type: select
+    proxies:
+      - "DIRECT"
+      - "⚡ AUTO"
+      - "🇭🇰 HK"
+      - "🇯🇵 JP"
+      - "🇺🇸 US"
+      - "🌍 GLOBAL"
+    include-all: true
+
+  # 中国大陆：默认直连
+  - name: "🏠 CN"
+    type: select
+    proxies:
+      - "DIRECT"
+      - "🚀 PROXY"
+
+# ------------------------------------------------------------
+# 远程规则集
+#
+# format: text：
+# - 规则文件为纯文本，每行一条规则或匹配项
+# - 与 .txt 规则源匹配
+# - 与 format: yaml 不可混用
+# ------------------------------------------------------------
+rule-providers:
+
+  reject:
+    type: http
+    behavior: domain
+    format: text
+    interval: 86400
+    path: "./ruleset/reject.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt"
+
+  private:
+    type: http
+    behavior: domain
+    format: text
+    interval: 86400
+    path: "./ruleset/private.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/private.txt"
+
+  icloud:
+    type: http
+    behavior: domain
+    format: text
+    interval: 86400
+    path: "./ruleset/icloud.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/icloud.txt"
+
+  apple:
+    type: http
+    behavior: domain
+    format: text
+    interval: 86400
+    path: "./ruleset/apple.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/apple.txt"
+
+  google:
+    type: http
+    behavior: domain
+    format: text
+    interval: 86400
+    path: "./ruleset/google.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/google.txt"
+
+  proxy:
+    type: http
+    behavior: domain
+    format: text
+    interval: 86400
+    path: "./ruleset/proxy.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/proxy.txt"
+
+  direct:
+    type: http
+    behavior: domain
+    format: text
+    interval: 86400
+    path: "./ruleset/direct.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/direct.txt"
+
+  cncidr:
+    type: http
+    behavior: ipcidr
+    format: text
+    interval: 86400
+    path: "./ruleset/cncidr.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/cncidr.txt"
+
+  telegramcidr:
+    type: http
+    behavior: ipcidr
+    format: text
+    interval: 86400
+    path: "./ruleset/telegramcidr.txt"
+    url: "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/telegramcidr.txt"
+
+# ------------------------------------------------------------
+# 分流规则
+# 规则从上到下匹配，最后由 MATCH 兜底
+# ------------------------------------------------------------
+rules:
+
+  # 广告、跟踪、已知拦截域名
+  - "RULE-SET,reject,REJECT"
+
+  # 本机、私有地址、LAN：必须优先直连，防止旁路由回环
+  - "IP-CIDR,0.0.0.0/8,DIRECT,no-resolve"
+  - "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve"
+  - "IP-CIDR,100.64.0.0/10,DIRECT,no-resolve"
+  - "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve"
+  - "IP-CIDR,169.254.0.0/16,DIRECT,no-resolve"
+  - "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve"
+  - "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve"
+  - "IP-CIDR,224.0.0.0/4,DIRECT,no-resolve"
+  - "IP-CIDR,240.0.0.0/4,DIRECT,no-resolve"
+  - "IP-CIDR6,::1/128,DIRECT,no-resolve"
+  - "IP-CIDR6,fc00::/7,DIRECT,no-resolve"
+  - "IP-CIDR6,fe80::/10,DIRECT,no-resolve"
+
+  # 当前 LAN 网段；如不是 192.168.10.0/24，请替换
+  - "IP-CIDR,192.168.10.0/24,DIRECT,no-resolve"
+
+  # 私有域名、家庭/局域网域名
+  - "RULE-SET,private,DIRECT"
+
+  # Apple / iCloud
+  - "RULE-SET,icloud,🍎 APPLE"
+  - "RULE-SET,apple,🍎 APPLE"
+
+  # AI：优先于通用 Google / Proxy 规则
+  - "DOMAIN-SUFFIX,openai.com,🤖 AI"
+  - "DOMAIN-SUFFIX,chatgpt.com,🤖 AI"
+  - "DOMAIN-SUFFIX,oaistatic.com,🤖 AI"
+  - "DOMAIN-SUFFIX,oaiusercontent.com,🤖 AI"
+  - "DOMAIN-SUFFIX,anthropic.com,🤖 AI"
+  - "DOMAIN-SUFFIX,claude.ai,🤖 AI"
+  - "DOMAIN-SUFFIX,claudeusercontent.com,🤖 AI"
+  - "DOMAIN,gemini.google.com,🤖 AI"
+  - "DOMAIN,ai.google.dev,🤖 AI"
+  - "DOMAIN,generativelanguage.googleapis.com,🤖 AI"
+
+  # GitHub / GitHub API / GHCR
+  - "DOMAIN-SUFFIX,github.com,💻 DEV"
+  - "DOMAIN-SUFFIX,githubusercontent.com,💻 DEV"
+  - "DOMAIN-SUFFIX,githubassets.com,💻 DEV"
+  - "DOMAIN-SUFFIX,githubapp.com,💻 DEV"
+  - "DOMAIN-SUFFIX,github.io,💻 DEV"
+  - "DOMAIN-SUFFIX,githubstatus.com,💻 DEV"
+  - "DOMAIN-SUFFIX,ghcr.io,💻 DEV"
+
+  # Docker / OCI
+  - "DOMAIN-SUFFIX,docker.com,💻 DEV"
+  - "DOMAIN-SUFFIX,docker.io,💻 DEV"
+  - "DOMAIN-SUFFIX,dockerusercontent.com,💻 DEV"
+  - "DOMAIN,registry-1.docker.io,💻 DEV"
+  - "DOMAIN-SUFFIX,quay.io,💻 DEV"
+
+  # 开发和包管理服务
+  - "DOMAIN-SUFFIX,npmjs.com,💻 DEV"
+  - "DOMAIN,registry.npmjs.org,💻 DEV"
+  - "DOMAIN-SUFFIX,yarnpkg.com,💻 DEV"
+  - "DOMAIN,registry.yarnpkg.com,💻 DEV"
+  - "DOMAIN-SUFFIX,pypi.org,💻 DEV"
+  - "DOMAIN-SUFFIX,pythonhosted.org,💻 DEV"
+  - "DOMAIN-SUFFIX,files.pythonhosted.org,💻 DEV"
+  - "DOMAIN-SUFFIX,rubygems.org,💻 DEV"
+  - "DOMAIN-SUFFIX,packagist.org,💻 DEV"
+  - "DOMAIN-SUFFIX,crates.io,💻 DEV"
+  - "DOMAIN-SUFFIX,maven.org,💻 DEV"
+  - "DOMAIN-SUFFIX,repo.maven.apache.org,💻 DEV"
+  - "DOMAIN-SUFFIX,gradle.org,💻 DEV"
+  - "DOMAIN-SUFFIX,go.dev,💻 DEV"
+  - "DOMAIN,proxy.golang.org,💻 DEV"
+  - "DOMAIN-SUFFIX,golang.org,💻 DEV"
+  - "DOMAIN-SUFFIX,gitlab.com,💻 DEV"
+  - "DOMAIN-SUFFIX,bitbucket.org,💻 DEV"
+  - "DOMAIN-SUFFIX,sourceforge.net,💻 DEV"
+  - "DOMAIN-SUFFIX,jetbrains.com,💻 DEV"
+
+  # 国内开发镜像直连
+  - "DOMAIN-SUFFIX,npmmirror.com,DIRECT"
+  - "DOMAIN-SUFFIX,registry.npmmirror.com,DIRECT"
+  - "DOMAIN-SUFFIX,mirrors.aliyun.com,DIRECT"
+  - "DOMAIN-SUFFIX,mirrors.cloud.tencent.com,DIRECT"
+  - "DOMAIN-SUFFIX,mirrors.ustc.edu.cn,DIRECT"
+  - "DOMAIN-SUFFIX,mirrors.tuna.tsinghua.edu.cn,DIRECT"
+
+  # Google / YouTube
+  - "RULE-SET,google,🔍 GOOGLE"
+  - "DOMAIN-SUFFIX,youtube.com,🔍 GOOGLE"
+  - "DOMAIN-SUFFIX,youtu.be,🔍 GOOGLE"
+  - "DOMAIN-SUFFIX,googlevideo.com,🔍 GOOGLE"
+  - "DOMAIN-SUFFIX,ytimg.com,🔍 GOOGLE"
+  - "DOMAIN-SUFFIX,ggpht.com,🔍 GOOGLE"
+
+  # Microsoft / Azure / VS Code / GitHub Copilot
+  - "DOMAIN-SUFFIX,microsoft.com,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,microsoftonline.com,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,live.com,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,office.com,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,office365.com,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,windows.net,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,azure.com,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,azureedge.net,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,visualstudio.com,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,vsassets.io,🪟 MICROSOFT"
+  - "DOMAIN-SUFFIX,githubcopilot.com,🪟 MICROSOFT"
+
+  # Telegram：域名和 IP 网段
+  - "DOMAIN-SUFFIX,telegram.org,✈️ TELEGRAM"
+  - "DOMAIN-SUFFIX,t.me,✈️ TELEGRAM"
+  - "DOMAIN-SUFFIX,tdesktop.com,✈️ TELEGRAM"
+  - "RULE-SET,telegramcidr,✈️ TELEGRAM"
+
+  # 流媒体
+  - "DOMAIN-SUFFIX,netflix.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,nflxvideo.net,🎬 STREAM"
+  - "DOMAIN-SUFFIX,nflximg.net,🎬 STREAM"
+  - "DOMAIN-SUFFIX,nflxso.net,🎬 STREAM"
+  - "DOMAIN-SUFFIX,disneyplus.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,dssott.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,max.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,hulu.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,primevideo.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,spotify.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,scdn.co,🎬 STREAM"
+  - "DOMAIN-SUFFIX,tiktok.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,tiktokv.com,🎬 STREAM"
+  - "DOMAIN-SUFFIX,tiktokcdn.com,🎬 STREAM"
+
+  # 游戏
+  - "DOMAIN-SUFFIX,steampowered.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,steamcommunity.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,steamstatic.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,steamcontent.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,epicgames.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,unrealengine.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,riotgames.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,leagueoflegends.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,blizzard.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,battle.net,🎮 GAME"
+  - "DOMAIN-SUFFIX,xboxlive.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,playstation.com,🎮 GAME"
+  - "DOMAIN-SUFFIX,nintendo.net,🎮 GAME"
+
+  # 境外协作、社交、生产力服务
+  - "DOMAIN-SUFFIX,discord.com,🚀 PROXY"
+  - "DOMAIN-SUFFIX,discordapp.com,🚀 PROXY"
+  - "DOMAIN-SUFFIX,discordapp.net,🚀 PROXY"
+  - "DOMAIN-SUFFIX,slack.com,🚀 PROXY"
+  - "DOMAIN-SUFFIX,slack-edge.com,🚀 PROXY"
+  - "DOMAIN-SUFFIX,notion.so,🚀 PROXY"
+  - "DOMAIN-SUFFIX,notion.site,🚀 PROXY"
+  - "DOMAIN-SUFFIX,figma.com,🚀 PROXY"
+  - "DOMAIN-SUFFIX,linear.app,🚀 PROXY"
+  - "DOMAIN-SUFFIX,reddit.com,🚀 PROXY"
+  - "DOMAIN-SUFFIX,redd.it,🚀 PROXY"
+  - "DOMAIN-SUFFIX,x.com,🚀 PROXY"
+  - "DOMAIN-SUFFIX,twitter.com,🚀 PROXY"
+
+  # 常用中国大陆服务：走可在面板中切换的 CN 组，默认 DIRECT
+  - "DOMAIN-SUFFIX,baidu.com,🏠 CN"
+  - "DOMAIN-SUFFIX,bilibili.com,🏠 CN"
+  - "DOMAIN-SUFFIX,qq.com,🏠 CN"
+  - "DOMAIN-SUFFIX,weixin.qq.com,🏠 CN"
+  - "DOMAIN-SUFFIX,taobao.com,🏠 CN"
+  - "DOMAIN-SUFFIX,tmall.com,🏠 CN"
+  - "DOMAIN-SUFFIX,jd.com,🏠 CN"
+  - "DOMAIN-SUFFIX,aliyun.com,🏠 CN"
+  - "DOMAIN-SUFFIX,alibaba.com,🏠 CN"
+  - "DOMAIN-SUFFIX,alipay.com,🏠 CN"
+  - "DOMAIN-SUFFIX,163.com,🏠 CN"
+  - "DOMAIN-SUFFIX,126.com,🏠 CN"
+  - "DOMAIN-SUFFIX,sina.com.cn,🏠 CN"
+  - "DOMAIN-SUFFIX,zhihu.com,🏠 CN"
+  - "DOMAIN-SUFFIX,douyin.com,🏠 CN"
+  - "DOMAIN-SUFFIX,bytedance.com,🏠 CN"
+
+  # 通用规则集放在业务特定规则之后
+  - "RULE-SET,proxy,🚀 PROXY"
+  - "RULE-SET,direct,DIRECT"
+  - "RULE-SET,cncidr,DIRECT,no-resolve"
+
+  # 所有未命中的流量默认代理
+  - "MATCH,🚀 PROXY"
