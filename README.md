@@ -39,6 +39,35 @@ logread | grep -iE 'openclash|mihomo|provider|error' | tail -80
 crontab -l
 ```
 
+## 工具：YouTube 订阅用量观测器
+
+`tools/ytwatch/` 下的脚本用于回答一个问题：**YouTube 流量在各订阅之间摊得均不均。**
+
+它按连接链路里的 `📺 YT-N` 把下载字节归属到对应订阅，每 5 秒采样、每 5 分钟落一行，可长期运行后出均匀度报表（含基尼系数）。
+
+```sh
+# 安装到路由器（依赖路由器已装 ruby + json 库）
+tools/ytwatch/install.sh root@192.168.10.2
+
+# 看报表
+ssh root@192.168.10.2 'ruby /etc/ytwatch/report.rb'
+
+# 停止 / 卸载
+ssh root@192.168.10.2 '/etc/init.d/ytwatch stop'
+ssh root@192.168.10.2 '/etc/init.d/ytwatch disable; rm -rf /etc/ytwatch /etc/init.d/ytwatch'
+```
+
+**口径与局限**（读数前务必了解）：
+
+- 只统计 `📺 YT-LB` 下归属到 `📺 YT-N` 的下载流量。其他策略组（`⚡ AUTO`/`🚀 PROXY`）的节点名在多个订阅间重名，无法归属到具体订阅。
+- 只统计 download，不统计 upload。
+- 5 秒采样间隔内开合的短连接会漏计；视频长连接不受影响。绝对值略低于真实值，**比例关系可信**。
+- mihomo 的负载均衡按**连接**而非字节分流，单设备长期观看的分布会偏斜；多设备并行才能显著降低基尼系数。
+
+路由器上的数据文件 `quota.csv` / `delta.csv` / `state.json` 是运行产物，不要提交。
+
 ## 安全
 订阅 URL 往往包含密钥。不要公开 `subscriptions.txt` 或带凭据的日志；保持文件权限 600。
 手动节点样例是文档，不是可连通节点。控制接口不要暴露 WAN。
+`manual_nodes.yaml` 与 `subscriptions.txt` 已列入 `.gitignore`，禁止提交。
+

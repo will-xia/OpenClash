@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+START=99
+start() {
+  [ -f /etc/ytwatch/quota_logger.rb ] || return 1
+  PIDF=/etc/ytwatch/quota.pid
+  if [ -f "$PIDF" ]; then
+    OLD=$(cat "$PIDF" 2>/dev/null)
+    if [ -n "$OLD" ] && [ -r "/proc/$OLD/cmdline" ] && grep -q quota_logger "/proc/$OLD/cmdline" 2>/dev/null; then
+      echo "ytwatch already running ($OLD)"; return 0
+    fi
+  fi
+  mkdir -p /etc/ytwatch
+  nohup ruby /etc/ytwatch/quota_logger.rb >>/etc/ytwatch/run.log 2>&1 &
+  echo "ytwatch started"
+}
+stop() {
+  [ -f /etc/ytwatch/quota.pid ] && kill "$(cat /etc/ytwatch/quota.pid)" 2>/dev/null
+  rm -f /etc/ytwatch/quota.pid
+  echo "ytwatch stopped"
+}
