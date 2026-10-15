@@ -1,0 +1,105 @@
+# 仅为协议字段示例：全部 example.com / UUID / 密码均为占位符！
+# 初次部署建议只保留一个已填好真实参数的节点，其余示例删除或注释。
+# 此文件是 file proxy-provider：顶层只保留 proxies。
+proxies:
+  # VLESS + Reality + Vision / TCP
+  - name: "EXAMPLE-VLESS-Reality"
+    type: vless
+    server: vless.example.com
+    port: 443
+    uuid: "11111111-1111-4111-8111-111111111111"
+    udp: true
+    tls: true
+    network: tcp
+    servername: www.example.com
+    client-fingerprint: chrome
+    reality-opts:
+      public-key: "REPLACE_REALITY_PUBLIC_KEY"
+      short-id: "01234567"
+    flow: xtls-rprx-vision
+
+  # VLESS + WebSocket + TLS（非 Reality）
+  - name: "EXAMPLE-VLESS-WS"
+    type: vless
+    server: ws.example.com
+    port: 443
+    uuid: "22222222-2222-4222-8222-222222222222"
+    tls: true
+    servername: ws.example.com
+    network: ws
+    ws-opts:
+      path: "/your-ws-path"
+      headers:
+        Host: ws.example.com
+
+  # VMess + WebSocket + TLS
+  - name: "EXAMPLE-VMess-WS"
+    type: vmess
+    server: vmess.example.com
+    port: 443
+    uuid: "33333333-3333-4333-8333-333333333333"
+    alterId: 0
+    cipher: auto
+    tls: true
+    servername: vmess.example.com
+    network: ws
+    ws-opts:
+      path: "/vmess"
+      headers:
+        Host: vmess.example.com
+
+  # Trojan + TLS
+  - name: "EXAMPLE-Trojan"
+    type: trojan
+    server: trojan.example.com
+    port: 443
+    password: "REPLACE_TROJAN_PASSWORD"
+    sni: trojan.example.com
+    udp: true
+
+  # Shadowsocks AEAD
+  - name: "EXAMPLE-SS"
+    type: ss
+    server: ss.example.com
+    port: 8388
+    cipher: aes-128-gcm
+    password: "REPLACE_SS_PASSWORD"
+    udp: true
+
+  # Hysteria2（需要 Mihomo 内核支持）
+  - name: "EXAMPLE-Hysteria2"
+    type: hysteria2
+    server: hy2.example.com
+    port: 443
+    password: "REPLACE_HY2_PASSWORD"
+    sni: hy2.example.com
+    skip-cert-verify: false
+
+  # TUIC v5（需要 Mihomo 内核支持）
+  - name: "EXAMPLE-TUIC"
+    type: tuic
+    server: tuic.example.com
+    port: 443
+    uuid: "44444444-4444-4444-8444-444444444444"
+    password: "REPLACE_TUIC_PASSWORD"
+    sni: tuic.example.com
+    alpn: [h3]
+    congestion-controller: bbr
+    udp-relay-mode: native
+
+  # SOCKS5 代理（非加密隧道）
+  - name: "EXAMPLE-SOCKS5"
+    type: socks5
+    server: socks.example.com
+    port: 1080
+    username: "REPLACE_USER"
+    password: "REPLACE_PASSWORD"
+    udp: false
+
+  # HTTP 代理（非加密隧道）
+  - name: "EXAMPLE-HTTP"
+    type: http
+    server: http.example.com
+    port: 8080
+    username: "REPLACE_USER"
+    password: "REPLACE_PASSWORD"

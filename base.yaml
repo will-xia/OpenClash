@@ -1,0 +1,15 @@
+# OpenClash 唯一主配置；不要放订阅、节点或业务分流
+# 由 node_sources.conf 和 full_rules_only.conf 覆写后使用
+mixed-port: 7890
+allow-lan: true
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+proxies: []
+proxy-groups:
+  - name: TEMP
+    type: select
+    proxies: [DIRECT]
+rules:
+  - MATCH,TEMP
