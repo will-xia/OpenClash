@@ -1,0 +1,20 @@
+# ------------------------------------------------------------
+# 含订阅凭据 / 节点凭据的私有文件，禁止提交到 GitHub
+# ------------------------------------------------------------
+
+# 手动节点：含 server / uuid / password / public-key / short-id 等真实凭据
+# （openclash_local_aggregate_v2/manual_nodes.yaml 为实际启用版本）
+manual_nodes.yaml
+
+# 机场订阅清单：URL 内嵌订阅 token
+subscriptions.txt
+
+# 节点合并产物，可能由上面两者生成、含凭据
+merged-nodes.yaml
+
+# 压缩包会连带打包上面的私有文件
+*.zip
+
+# 路由器上下载 / 生成的 provider 与规则集缓存，属运行时数据
+proxy_provider/
+rule_provider/
