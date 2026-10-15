@@ -144,7 +144,61 @@ ssh root@<router> "curl -s -H \"Authorization: Bearer $S\" \
 ssh root@<router> 'ruby /etc/ytwatch/report.rb'   # 看「总下载」是否在涨
 ```
 
-### 重点检查的依赖
+### 踩过的坑：heredoc 缩进 / 字符前缀类错误
+
+此类错误的共同点是**看文件看不出来，只有把不可见字符显式化才能发现**，且后果是整份 YAML 报废、覆写模块静默不生效。以下两次都是实测发生过的。
+
+#### 实例 1：heredoc 里 `$name` 缩进写错一级（造成过真实宕机）
+
+`update.sh` 的循环 heredoc 中，provider 顶层键原本是 **2 空格**：
+
+```sh
+  $name:                      # 2 空格，与 header 的 manual_nodes 同级
+    type: file
+```
+
+误改成 **3 空格**后，`airport_*` 比 `manual_nodes` 深一级，YAML 直接解析失败：
+
+```
+Psych::SyntaxError: did not find expected key while parsing a block mapping at line 2 column 3
+```
+
+连锁后果：`node_sources.conf` 应用失败 → 生成配置丢失 `proxy-providers` → 全部节点消失。
+
+**当时为什么没自愈**：`openclash.config.enable` 恰好是 `'0'`。禁用状态下 init 脚本不会重新生成配置，只会用上一份残缺的 `base.yaml` 拉起内核 —— 所以事后把 `update.sh` 修好也无效，必须 `uci set openclash.config.enable='1'` 再 restart。
+
+**根因之一是误读工具输出**：`Read` 工具的行号前缀是 `<行号>: `（4 字符），其后的 `  $name:` 实际只有 2 空格。把前缀当内容读就会多数一格。
+
+**现形命令**（把空格变成 `·`，一眼看出层级）：
+
+```sh
+sed 's/ /·/g' update.sh | grep -n 'name:'        # heredoc 内
+sed 's/ /·/g' /etc/openclash/overwrite/node_sources.conf | grep '^·*[a-z]'
+```
+
+**防线**：`update.sh` 现在有安装前校验关卡（见 `tools/update-gate-test.sh`），provider 顶层键若不是 2 空格直接退出码 1 并保留原模块。
+
+#### 实例 2：跨行字符串拼接被当成语法错误
+
+```ruby
+warn alert("第一段。"
+           "第二段。")      # ← ruby 2.6 报 syntax error
+```
+
+**`f("a"\n"b")` 这种跨行相邻字符串在方法参数位不合法**，必须显式 `+`。写成 `+` 后 2.6 与 3.4 都通过。
+
+#### 共性防范
+
+| 错误类型 | 为什么危险 | 怎么现形 |
+|---|---|---|
+| 缩进差一级 | YAML 语义完全改变，肉眼不可见 | `sed 's/ /·/g'` |
+| Tab 当缩进 | YAML 直接拒绝；曾导致整份配置解析失败 | `grep -nP '\t'`（OpenWrt BusyBox 用 `grep -n "$(printf '\t')"`） |
+| 字符串跨行拼接 | 语法错误，但只在特定 ruby 版本暴露 | 统一用 `+`，两端版本都跑测试 |
+| 工具行号前缀 | 把 `  内容` 读成 `    内容` | 用 `sed 's/ /·/g'` 而非直接读 |
+
+**通用纪律**：改动任何「生成配置」的脚本后，先在本地用假数据跑一遍生成逻辑并解析产物，再上传；上传后先跑生成、**校验产物**，最后才重启服务。重启必须放在最后一步。
+
+
 
 | 依赖 | 现在的工作方式 | 升级后风险 |
 |---|---|---|
