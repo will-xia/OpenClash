@@ -26,6 +26,7 @@ proxy-providers:
       enable: true
       url: https://www.gstatic.com/generate_204
       interval: 300
+      expected-status: 204
 EOF
 fail=0
 count=0
@@ -65,6 +66,7 @@ while IFS='|' read -r name url fmt || [ -n "${name:-}" ]; do
       enable: true
       url: https://www.gstatic.com/generate_204
       interval: 300
+      expected-status: 204
 EOF
     count=$((count+1))
   fi
