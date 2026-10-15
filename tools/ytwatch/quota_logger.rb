@@ -77,6 +77,11 @@ loop do
       ['curl', '-s', '-m', '4', '-H', "Authorization: Bearer #{secret}",
        'http://127.0.0.1:9090/connections'], err: File::NULL, &:read
     )
+    # 重启内核时 curl 会返回空，此时静默跳过本次采样，不记错误也不丢累计
+    if raw.nil? || raw.strip.empty?
+      sleep SAMPLE
+      next
+    end
     j = JSON.parse(raw)
     now = Time.now.to_i
 
