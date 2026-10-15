@@ -83,7 +83,108 @@ install.sh 会按运行时 `$LOAD_PATH` 探测 site_ruby 路径（**不写死 ru
 
 **注意**：这是自研实现，非官方 gem。不支持 `json/add/*` 附加混入类、`create_additions`、`JSON::Coder`、quirks 模式。用于调试 mihomo 输出足够，别用在生产链路。
 
-## 安全
+## 升级（OpenWrt / OpenClash）
+
+刷固件或升级 OpenClash 前**务必先读这一节**。这台设备上没有 `opkg`，ruby 与 OpenClash 都是**镜像内置**，所以升级等于换镜像，`/usr` 会被整个替换。
+
+### 会自动保留的
+
+| 路径 | 依据 |
+|---|---|
+| `/etc/openclash/` | `/lib/upgrade/keep.d/luci-app-openclash` 明确保留 |
+| `/etc/ytwatch/`、`/etc/init.d/ytwatch`、`/etc/rc.d/S99ytwatch` | 均在 `/etc` 下，`base-files` 保留 |
+
+配置、订阅清单、手动节点、覆写模块、采集器的全部历史数据都在保留范围内。
+
+### 一定会丢的
+
+`/usr/lib/ruby/site_ruby/<版本>/json.rb` —— 手工放入的 JSON shim，`/usr` 下没有任何 keep.d 条目。
+
+不过 `tools/ruby-json/install.sh` 是**运行时探测 site_ruby 路径**的，不写死版本号，新版 ruby 无论是 3.5 / 3.6 都会自动落到对应目录。
+
+### 升级前：备份
+
+```sh
+ssh root@<router> '
+  tar czf /root/openclash-preupgrade-$(date +%Y%m%d).tar.gz \
+    /etc/openclash/config /etc/openclash/overwrite \
+    /etc/openclash/aggregator/subscriptions.txt \
+    /etc/openclash/proxy_provider/manual_nodes.yaml /etc/ytwatch \
+  && ls -lh /root/openclash-preupgrade-*.tar.gz'
+```
+
+### 升级后：按顺序重装
+
+```sh
+git pull
+tools/ruby-json/install.sh root@<router>   # ① 补回 json shim
+tools/ytwatch/install.sh  root@<router>    # ② 重装采集器
+```
+
+### 升级后：逐项验证
+
+**不能只看"进程起来了"** —— 下面这些故障都不会让服务挂掉，只会让规则静默失效或数据静默变空。
+
+```sh
+# 1. 覆写模块是否真的生效
+ssh root@<router> 'grep -c "YT-LB" /etc/openclash/base.yaml'      # 应 >5
+ssh root@<router> 'grep -c "RULE-SET" /etc/openclash/base.yaml'   # 应 ≈12
+
+# 2. 规则集是否全部加载（9 个）
+S=$(ssh root@<router> 'sed -n "s/^secret:[[:space:]]*//p" /etc/openclash/base.yaml')
+ssh root@<router> "curl -s -H \"Authorization: Bearer $S\" \
+  http://127.0.0.1:9090/rules | grep -o '\"type\":\"RuleSet\"' | wc -l"   # 应 =9
+
+# 3. provider 数量是否正常（12 个：10 订阅 + manual_nodes + default）
+ssh root@<router> "curl -s -H \"Authorization: Bearer $S\" \
+  http://127.0.0.1:9090/providers/proxies \
+  | grep -oE '\"name\":\"[a-zA-Z0-9_]+\",\"type\":\"Proxy\"' | wc -l"
+
+# 4. 采集器是否真的在记数（最能骗你的一项）
+ssh root@<router> 'ruby /etc/ytwatch/report.rb'   # 看「总下载」是否在涨
+```
+
+### 重点检查的依赖
+
+| 依赖 | 现在的工作方式 | 升级后风险 |
+|---|---|---|
+| `base.yaml` 的 `secret:` 行 | 采集器与诊断脚本按 `start_with?('secret:')` 读取 | 格式若变 → 读到空 → 持续 401 → **告警会触发**（见下） |
+| `/providers/proxies`、`/connections` | mihomo REST API | 端点若变 → JSON 缺 `connections` → **告警会触发** |
+| 连接链 `[节点, 📺 YT-N, 📺 YT-LB]` | 采集器靠 `chains[1]` 归属订阅 | 链结构若变 → 归属失效，**静默**（无告警，需人工比对 `chains`） |
+| 覆写模块语法 `[YAML]` / `proxy-groups!:` | OpenClash 覆写机制 | 不兼容则模块不生效但进程照常起，**静默** |
+| `./rule_provider/` 路径 | OpenClash 把 `./ruleset/` 规范化成它 | 若改名 → 9 个规则集加载失败，**静默** |
+
+### 加固：把采集数据加进升级保留清单
+
+`/lib/upgrade/keep.d/ytwatch` 内容为 `/etc/ytwatch/`，让「保留配置」式升级连采集器的历史数据一起保留。
+
+```sh
+ssh root@<router> 'echo "/etc/ytwatch/" > /lib/upgrade/keep.d/ytwatch'
+```
+
+**局限**：`/lib/upgrade/keep.d/` 本身位于镜像内，**整包刷机后会被重置**，此条目即失效。它对「保留配置升级」（sysupgrade -k 或 LuCI 勾选保留配置）有效，对不留配置的刷机无效。后者依赖 `/etc` 默认保留，通常也够，但显式条目更稳。
+
+
+
+### 采集器失效告警
+
+`quota_logger.rb` 会区分三种静默失效并告警，写在 `/etc/ytwatch/run.log`：
+
+| 状态 | 含义 |
+|---|---|
+| `empty` | curl 无返回：OpenClash 未运行、端口不通、或 secret 失效 |
+| `parse` | 返回不是合法 JSON（如被替换成 HTML 错误页） |
+| `shape` | JSON 能解析但缺 `connections` 数组：mihomo 升级改了 API |
+
+行为：连续失败 **6 次（约 30 秒）**才告警一次，避免重启抖动刷屏；恢复时记一条「API 已恢复正常（此前数据有缺失）」。首次失败另记一条明细便于定位。
+
+```sh
+ssh root@<router> 'tail -20 /etc/ytwatch/run.log'
+```
+
+测试：`ruby tools/ytwatch/quota_logger_test.rb`（20 项，含三种失效模式的告警行为）。
+
+
 订阅 URL 往往包含密钥。不要公开 `subscriptions.txt` 或带凭据的日志；保持文件权限 600。
 手动节点样例是文档，不是可连通节点。控制接口不要暴露 WAN。
 `manual_nodes.yaml` 与 `subscriptions.txt` 已列入 `.gitignore`，禁止提交。
