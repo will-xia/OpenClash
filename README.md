@@ -46,7 +46,10 @@ crontab -l
 它按连接链路里的 `📺 YT-N` 把下载字节归属到对应订阅，每 5 秒采样、每 5 分钟落一行，可长期运行后出均匀度报表（含基尼系数）。
 
 ```sh
-# 安装到路由器（依赖路由器已装 ruby + json 库）
+# 若路由器 ruby 缺 json 库，先装 shim（见下一节）
+tools/ruby-json/install.sh root@192.168.10.2
+
+# 安装观测器
 tools/ytwatch/install.sh root@192.168.10.2
 
 # 看报表
@@ -65,6 +68,20 @@ ssh root@192.168.10.2 '/etc/init.d/ytwatch disable; rm -rf /etc/ytwatch /etc/ini
 - mihomo 的负载均衡按**连接**而非字节分流，单设备长期观看的分布会偏斜；多设备并行才能显著降低基尼系数。
 
 路由器上的数据文件 `quota.csv` / `delta.csv` / `state.json` 是运行产物，不要提交。
+
+## 工具：ruby json shim
+
+OpenWrt 的 ruby 是精简构建，stdlib 只剩 `date/digest/pstore/psych/yaml`，**缺 `json` 与 `strscan`**，而官方 json gem 从 2.9 起已移除纯 Ruby 回退、只剩 C 扩展（无法在此编译）；最后一个还带 pure 实现的 2.7.2，其 parser 又 `require 'strscan'`。所以观测器改用自包含的纯 Ruby 实现。
+
+`tools/ruby-json/json.rb` 就是这个实现，API 对齐官方 gem 的常用子集（`parse`/`generate`/`pretty_generate`/`load_file`/`dump`/`[]`/`to_json`/`symbolize_names`/`max_nesting`），不依赖任何 C 扩展，语法兼容 ruby 2.6 与 3.4。
+
+```sh
+tools/ruby-json/install.sh root@192.168.10.2
+```
+
+install.sh 会按运行时 `$LOAD_PATH` 探测 site_ruby 路径（**不写死 ruby 版本号**），安装后跑 51 项回归测试。卸载：`rm -f <site_ruby>/json.rb`。
+
+**注意**：这是自研实现，非官方 gem。不支持 `json/add/*` 附加混入类、`create_additions`、`JSON::Coder`、quirks 模式。用于调试 mihomo 输出足够，别用在生产链路。
 
 ## 安全
 订阅 URL 往往包含密钥。不要公开 `subscriptions.txt` 或带凭据的日志；保持文件权限 600。

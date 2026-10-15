@@ -10,6 +10,16 @@ D=/etc/ytwatch
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 echo "==> 目标: $T   安装到: $D"
+echo "==> 依赖检查: ruby + json 库"
+if ! ssh "$T" 'command -v ruby >/dev/null 2>&1'; then
+  echo "!! 路由器未安装 ruby，无法运行采集器"
+  exit 1
+fi
+if ! ssh "$T" 'ruby -rjson -e "exit 0" 2>/dev/null'; then
+  echo "!! ruby 缺少 json 库。OpenWrt 的精简 ruby 需先装 shim："
+  echo "   $(dirname "$HERE")/ruby-json/install.sh $T"
+  exit 1
+fi
 ssh "$T" "mkdir -p $D"
 for f in quota_logger.rb report.rb quota_logger_test.rb; do
   scp -q "$HERE/$f" "$T:$D/$f"
