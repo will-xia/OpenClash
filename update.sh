@@ -72,6 +72,46 @@ EOF
   fi
 done < "$CFG"
 chmod 600 "$TMPMODULE"
-if [ -f "$MODULE" ] && cmp -s "$TMPMODULE" "$MODULE"; then rm -f "$TMPMODULE"; else mv -f "$TMPMODULE" "$MODULE"; echo 'Updated node_sources.conf'; fi
+
+# ------------------------------------------------------------------
+# 安装前校验：坏的 YAML 绝不能被安装成生效模块
+#
+# 历史上此处出过事故：heredoc 的 $name 缩进写成 3 空格，比 header 里
+# manual_nodes 的 2 空格深一级，整份 node_sources.conf YAML 解析失败，
+# OpenClash 应用覆写模块失败导致全部节点消失。当时若此关卡存在，
+# 坏文件会被拦在这里、旧模块继续生效，零宕机。
+#
+# 只做不依赖 ruby/opkg 的结构检查：所有 provider 顶层键必须与
+# header 的 manual_nodes 同为 2 空格缩进。
+# ------------------------------------------------------------------
+if grep -qE '^   [A-Za-z0-9_-]+:' "$TMPMODULE"; then
+  echo "FATAL: generated YAML has provider keys at wrong indent (3 spaces)." >&2
+  echo "       Keeping previous node_sources.conf untouched." >&2
+  grep -nE '^   [A-Za-z0-9_-]+:' "$TMPMODULE" | head -3 >&2
+  rm -f "$TMPMODULE"
+  exit 1
+fi
+
+# 每个 provider 必须带齐关键字段
+for k in "type: file" "expected-status: 204"; do
+  got=$(grep -c "$k" "$TMPMODULE")
+  want=$((count + 1))
+  if [ "$got" -lt "$want" ]; then
+    echo "FATAL: expected >=${want} occurrences of '$k', got $got." >&2
+    echo "       Keeping previous node_sources.conf untouched." >&2
+    rm -f "$TMPMODULE"
+    exit 1
+  fi
+done
+
+if [ -f "$MODULE" ]; then
+  cp -f "$MODULE" "$MODULE.bak"
+fi
+if [ -f "$MODULE" ] && cmp -s "$TMPMODULE" "$MODULE"; then
+  rm -f "$TMPMODULE"
+else
+  mv -f "$TMPMODULE" "$MODULE"
+  echo 'Updated node_sources.conf'
+fi
 echo "Active subscription providers: $count; manual_nodes: 1"
 [ "$fail" -eq 0 ] || exit 1
