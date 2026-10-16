@@ -134,6 +134,98 @@ curl -s -X DELETE -H "Authorization: Bearer $S" \
 - 组的 `now=⚡ AUTO` **不是**固定到某个节点，它本身就是自动模式，无需解除。
 - `store-selected: true` 会把固定写进 `cache.db`（BoltDB 格式），**重启后仍在**，必须显式解除。
 
+## 内网 DNS 覆盖：让域名在局域网内解析到内网 IP
+
+**场景**：RustDesk 服务端在 `192.168.10.168`，但客户端 `ID Server` 必须填公网域名 `home.weixia.de5.net:21116`（填域名出门才可用）。在家时该域名解析到**公网 IP**，内网流量于是绕一圈 NAT 回环；RustDesk 还会去连 Pro 版的 `21114` API 端口（开源服务端没有），在 OpenClash 日志里刷满：
+
+```
+[TCP] dial DIRECT (match RuleSet/cncidr) 192.168.10.188:xxxxx --> home.weixia.de5.net:21114 error: dial tcp 180.109.183.x:21114: connect: connection refused
+```
+
+**目标**：让 `home.weixia.de5.net` 在**局域网内**解析到 `192.168.10.168`（在外仍走公网 DNS）。这样 21116 命中 `IPCIDR(192.168.0.0/16)` 直接走二层，21114 也不再产生出站连接。
+
+### 机制：OpenClash 原生 custom_host
+
+OpenClash 自带「自定义 Hosts」开关，把条目合进运行配置的 `hosts:` 段：
+
+| 项 | 值 |
+|---|---|
+| UCI 开关 | `openclash.config.custom_host='1'` |
+| 条目文件 | `/etc/openclash/custom/openclash_custom_hosts.list`（**YAML 映射**格式） |
+| 消费方 | `/usr/share/openclash/yml_change.sh`：读该文件 → 合并进 `hosts:` → 自动设 `dns.use-hosts: true` |
+
+条目写法（与文件里已有的 `'alpha.clash.dev': '::1'` 同格式）：
+
+```yaml
+'home.weixia.de5.net': 192.168.10.168
+```
+
+```sh
+ssh root@<router> '
+  F=/etc/openclash/custom/openclash_custom_hosts.list
+  cp "$F" "$F.bak-$(date +%Y%m%d-%H%M%S)"
+  printf "\047home.weixia.de5.net\047: 192.168.10.168\n" >> "$F"
+  ruby -ryaml -e "p YAML.load_file(\"$F\")"      # 先确认能解析成 Hash，再往下走
+  uci set openclash.config.custom_host=1 && uci commit openclash
+  /etc/init.d/openclash restart
+  grep -A2 "^hosts:" /etc/openclash/base.yaml    # 应含该条目
+  grep "^  use-hosts" /etc/openclash/base.yaml   # 应为 true'
+```
+
+（按本章「操作纪律」：**追加后先 `ruby -ryaml` 解析确认合法**，最后才重启。）
+
+### 关键第二步：dnsmasq 的 rebind protection 会吃掉内网应答
+
+只做上面一步**不够**。LAN 客户端的 DNS 路径是 `客户端 → (OpenClash DNS Hijack，redirect to :53) → dnsmasq → clash:7874`。clash 明明返回了 `192.168.10.168`，但 **dnsmasq 的 `rebind_protection='1'` 会把「上游返回私有地址」当成 DNS rebinding 攻击而丢弃**（fake-ip `198.18.x` 不在拦截范围，所以此前一直没暴露）。必须把该域名加进白名单（对应 `--rebind-domain-ok=`）：
+
+```sh
+ssh root@<router> '
+  uci add_list dhcp.@dnsmasq[0].rebind_domain="home.weixia.de5.net"
+  uci commit dhcp
+  /etc/init.d/dnsmasq restart'
+```
+
+### 验证：clash 直查 vs dnsmasq，缺一不可
+
+只查一次会误判，必须**分别**确认 clash 与 dnsmasq 都返回内网 IP（BusyBox `nslookup` 不能指定端口，用 python 发查询）：
+
+```sh
+ssh root@<router> 'python3 - <<"PY"
+import socket,struct
+def q(name,port):
+    h=struct.pack(">HHHHHH",0x1234,0x0100,1,0,0,0)
+    qn=b"".join(bytes([len(p)])+p.encode() for p in name.split("."))+b"\x00"
+    s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.settimeout(3)
+    s.sendto(h+qn+struct.pack(">HH",1,1),("127.0.0.1",port))
+    d,_=s.recvfrom(2048); an=struct.unpack(">H",d[6:8])[0]; i=12
+    while d[i]!=0: i+=d[i]+1
+    i+=5; out=[]
+    for _ in range(an):
+        if d[i]&0xc0==0xc0: i+=2
+        else:
+            while d[i]!=0: i+=d[i]+1
+            i+=1
+        t=struct.unpack(">H",d[i:i+2])[0]; i+=8
+        rl=struct.unpack(">H",d[i:i+2])[0]; i+=2; rd=d[i:i+rl]; i+=rl
+        if t==1: out.append(socket.inet_ntoa(rd))
+    return out
+print("clash 7874 :", q("home.weixia.de5.net",7874))   # 期望 [192.168.10.168]
+print("dnsmasq 53 :", q("home.weixia.de5.net",53))     # 期望 [192.168.10.168]；空=被 rebind 丢弃
+PY'
+```
+
+排查信号：
+
+| 现象 | 含义 |
+|---|---|
+| clash 有值、dnsmasq 空 | rebind protection 未加白名单（**最常见的坑**） |
+| 两者都空 | `custom_host` 未开，或条目文件 YAML 写错（看日志 `Set Hosts Rules Failed`） |
+| 两者都是 `198.18.x` | `hosts:` 条目没进运行配置 |
+
+**客户端缓存**：域名有 TTL，改完后 RustDesk 可能仍持有旧的 fake-ip 连接一段时间，等其重连或重启客户端即可。判断修复是否生效，看日志里该域名的连接是否从 `match RuleSet(cncidr)` 变成 `match IPCIDR(192.168.0.0/16) using DIRECT`。
+
+两处改动都在 `/etc` 下，换镜像升级后保留：`openclash_custom_hosts.list`、`/etc/config/openclash`（`custom_host`）、`/etc/config/dhcp`（`rebind_domain`）。
+
 ## 升级（OpenWrt / OpenClash）
 
 刷固件或升级 OpenClash 前**务必先读这一节**。这台设备上没有 `opkg`，ruby 与 OpenClash 都是**镜像内置**，所以升级等于换镜像，`/usr` 会被整个替换。
@@ -183,6 +275,7 @@ uci get openclash.config.enable      # 必须是 1
 |---|---|
 | `/etc/openclash/` | `/lib/upgrade/keep.d/luci-app-openclash` 明确保留 |
 | `/etc/ytwatch/`、`/etc/init.d/ytwatch`、`/etc/rc.d/S99ytwatch` | 均在 `/etc` 下，`base-files` 保留 |
+| `/etc/config/openclash`（`custom_host`）、`/etc/config/dhcp`（`rebind_domain`） | 均在 `/etc` 下，`base-files` 保留 |
 
 配置、订阅清单、手动节点、覆写模块、采集器的全部历史数据都在保留范围内。
 
@@ -287,6 +380,18 @@ warn alert("第一段。"
 | 工具行号前缀 | 把 `  内容` 读成 `    内容` | 用 `sed 's/ /·/g'` 而非直接读 |
 
 **通用纪律**：详见本章开头的「操作纪律：先验证产物，再重启服务」—— 改动任何「生成配置」的脚本后，先在本地用假数据跑一遍生成逻辑并解析产物，再上传；上传后先跑生成、**校验产物**，最后才重启服务。重启必须放在最后一步。
+
+### 踩过的坑：BusyBox 工具假设类错误
+
+这类错误的共同点是**「这个命令我以为有，其实没有」，且失败不报错、只是静默返回空**，最容易导致误判（本轮实测）。
+
+| 我用了 | 实际（BusyBox） | 后果 | 改用 |
+|---|---|---|---|
+| `echo > /dev/tcp/host/port` | `ash` **无 `/dev/tcp`**，直接 shell 报错 | 端口探测结果全部为假 | `python3` socket |
+| `nslookup <域名> <server> -port=N` | `nslookup` 不支持指定端口 | 查不到 clash 的 7874，误以为 clash 没响应 | 用 `python3` 发 DNS 查询 |
+| `grep -P '\t'` | 无 `-P` | 匹配为空，误判「没有 Tab」 | `grep "$(printf '\t')"` 或 `sed` |
+
+**自检习惯**：任何探测/查询类命令，先拿一个**已知必然成立**的目标试一次（如 `nslookup localhost` 应返回、`python3` 连 `127.0.0.1:9090` 应通）。自检失败说明**命令本身不可用**，而不是「对象不存在」。
 
 
 
