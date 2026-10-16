@@ -83,6 +83,57 @@ install.sh 会按运行时 `$LOAD_PATH` 探测 site_ruby 路径（**不写死 ru
 
 **注意**：这是自研实现，非官方 gem。不支持 `json/add/*` 附加混入类、`create_additions`、`JSON::Coder`、quirks 模式。用于调试 mihomo 输出足够，别用在生产链路。
 
+## 面板：策略组的「固定」与「解除固定」
+
+这台路由器的面板是 **zashboard**（`/usr/share/openclash/ui/zashboard/`）。它和 metacubexd 的交互不同，**不要按 metacubexd 的文案去找按钮**。
+
+### zashboard 里怎么解除固定
+
+**点该策略组的「测速」按钮** —— 这就是解除固定的动作。对 Selector / LoadBalance / Smart 组，测速会先发一个 `DELETE /proxies/<组名>` 清除固定，再跑延迟测试。
+
+依据（`assets/clash-CrgcscFv.js`，chunk 名随版本变化）：
+
+```js
+proxyGroupLatencyTest = async name => {
+  const g = groups[name], all = g.all ?? [], url = ...;
+  if (speedtestMode === DASHBOARD &&
+      ["Selector","LoadBalance","Smart"].includes(g.type.toLowerCase()))
+    return g.fixed && unfixProxy(name),   // 先解除固定
+           runLatencyTest(name, all, url);
+  ...
+}
+// unfixProxy = name => http.delete(`/proxies/${encodeURIComponent(name)}`)
+```
+
+**前提**：仅当「设置 → 测速方式」为 **面板控制（Dashboard）** 时才会先解除固定（这是默认值）。改成其它测速方式后，点测速不再解除固定。
+
+### 视觉提示
+
+被固定的组，在当前节点名**左侧**显示一个小图钉图标（判定条件是 `fixed === now`）。悬停它出现提示：
+
+> 当前策略组被固定在了当前节点，点击测速来恢复{type}行为
+
+**metacubexd 的对应物**是一个警示色小图标，tooltip 为 `Restore automatic selection`（中文「恢复自动选择」）。zashboard 没有这个名字的按钮 —— 找不到是正常的。
+
+### 查看哪些组被固定 / 直接清除
+
+```sh
+ssh root@<router> '
+S=$(sed -n "s/^secret:[[:space:]]*//p" /etc/openclash/base.yaml)
+# 列出 fixed 非空的组
+curl -s -H "Authorization: Bearer $S" http://127.0.0.1:9090/proxies \
+  | python3 -c "import json,sys;d=json.load(sys.stdin)[\"proxies\"];\
+[print(k,\"->\",v[\"fixed\"]) for k,v in d.items() if v.get(\"fixed\")]"
+# 清除某一组的固定（把 NAME 换成组名，需 URL 编码）
+curl -s -X DELETE -H "Authorization: Bearer $S" \
+  "http://127.0.0.1:9090/proxies/$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"NAME\"))")"'
+```
+
+### 两个易混点
+
+- 组的 `now=⚡ AUTO` **不是**固定到某个节点，它本身就是自动模式，无需解除。
+- `store-selected: true` 会把固定写进 `cache.db`（BoltDB 格式），**重启后仍在**，必须显式解除。
+
 ## 升级（OpenWrt / OpenClash）
 
 刷固件或升级 OpenClash 前**务必先读这一节**。这台设备上没有 `opkg`，ruby 与 OpenClash 都是**镜像内置**，所以升级等于换镜像，`/usr` 会被整个替换。
