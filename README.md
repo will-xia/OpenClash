@@ -262,6 +262,75 @@ ssh root@<router> 'nslookup registry.ollama.ai | tail -3'
 
 客户端若已缓存过假地址，需等 TTL 或重启客户端/容器再重试。同类软件（任何做 SSRF/redirect 校验的 Go/Rust 程序，如 docker/podman 拉镜像、部分 CLI）遇到 `resolves to non-public` 都可照此处理。
 
+## 分流规则：让某个地址走代理或不走代理
+
+规则**自上而下匹配、命中即止**。要改变某个地址的走向，就在会命中它的规则**之前**插一条。
+
+### 两个入口
+
+| 入口 | 位置 | 优先级 | 适合 |
+|---|---|---|---|
+| 仓库 `full_rules_only.conf` 的 `rules!:` | 按文件内先后；须在 `RULE-SET,proxy,...` 与末尾 `MATCH,...` 之前 | 高 | 长期、纳入版本管理（推荐） |
+| `/etc/openclash/custom/openclash_custom_rules.list` | `yml_rules_change.sh` 插到规则**最顶**（`position: 'top'`） | 最高 | 临时试验 |
+| `/etc/openclash/custom/openclash_custom_rules_2.list` | 插到**最底**（`position: 'bottom'`） | 最低 | 兜底追加 |
+
+两个自定义清单由 `openclash.config.enable_custom_clash_rules='1'` 启用，内容里 `#` 为注释。
+
+### 语法
+
+```yaml
+- "DOMAIN-SUFFIX,cloudflarestorage.com,DIRECT"   # 域名后缀
+- "DOMAIN,example.com,DIRECT"                     # 精确域名
+- "DOMAIN-KEYWORD,ollama,🚀 PROXY"                # 关键字
+- "IP-CIDR,1.2.3.4/32,DIRECT,no-resolve"          # 单个 IP / 网段
+- "GEOSITE,category-ads-all,REJECT"               # geosite 分类
+- "RULE-SET,<规则集名>,DIRECT"                     # 整个规则集
+```
+
+第三段是出口：`DIRECT`（路由器本地直出）、`REJECT`、或任意策略组名（`🚀 PROXY` / `🤖 AI` / `🇭🇰 HK` …）。
+
+### 例：让 ollama / Cloudflare R2 直连
+
+在 `full_rules_only.conf` 的 `rules!:` 里、私有/LAN 段之后插入：
+
+```yaml
+  - "DOMAIN-SUFFIX,cloudflarestorage.com,DIRECT"
+  - "DOMAIN-SUFFIX,ollama.ai,DIRECT"
+```
+
+路由器本机快速验证（插到最顶）：
+
+```sh
+ssh root@<router> '
+  F=/etc/openclash/custom/openclash_custom_rules.list
+  cp "$F" "$F.bak-$(date +%Y%m%d-%H%M%S)"
+  printf -- "- \"DOMAIN-SUFFIX,example.com,DIRECT\"\n" >> "$F"
+  /etc/init.d/openclash restart'
+```
+
+### 验证
+
+```sh
+# 1. 规则是否进了运行配置、且在做代理的规则之前
+ssh root@<router> 'grep -n "cloudflarestorage" /etc/openclash/base.yaml'
+
+# 2. 实际走的链：chains[0] 是出口，直连时为 DIRECT，代理时为节点名
+S=$(ssh root@<router> 'sed -n "s/^secret:[[:space:]]*//p" /etc/openclash/base.yaml')
+curl -s -H "Authorization: Bearer $S" http://<router>:9090/connections \
+ | python3 -c 'import json,sys
+for c in json.load(sys.stdin).get("connections",[]):
+    m=c["metadata"]; h=m.get("host") or ""
+    if "example.com" in h:
+        print(h, "| rule:", c["rule"], "| chains:", " → ".join(c["chains"]))'
+```
+
+`chains` 从出口到外层：`chains[0]` = 实际出口（节点名或 `DIRECT`），`chains[-1]` = 进入的策略组。实测例：`DIRECT → 🍎 APPLE`、`[Self] Katabump-TUIC-TLS → 🚀 PROXY`。
+
+### 前提：域名规则要能命中真实-IP 连接
+
+- 本机 **sniffer 已开**（`sniffer.enable: true`、`override-destination: true`），mihomo 从 TLS SNI 还原域名，所以即使目标被 `fake-ip-filter` 解析成真实 IP，`DOMAIN-*` 规则照样命中。纯 IP、无 SNI 的连接只能靠 `IP-CIDR` 规则。
+- fake-ip 模式下，被规则判定为直连的域名，客户端拿到的**仍是 `198.18.x`**（除非该域名同时在 `fake-ip-filter` 里）。所以对「拒绝非公网地址」的客户端（如 ollama，见上一节），要**同时**做两件事：域名进 `fake-ip-filter`（拿真实 IP）+ 加 `DIRECT` 规则。
+
 ## 升级（OpenWrt / OpenClash）
 
 刷固件或升级 OpenClash 前**务必先读这一节**。这台设备上没有 `opkg`，ruby 与 OpenClash 都是**镜像内置**，所以升级等于换镜像，`/usr` 会被整个替换。
