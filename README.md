@@ -226,6 +226,42 @@ PY'
 
 两处改动都在 `/etc` 下，换镜像升级后保留：`openclash_custom_hosts.list`、`/etc/config/openclash`（`custom_host`）、`/etc/config/dhcp`（`rebind_domain`）。
 
+## fake-ip 与「拒绝非公网地址」的客户端
+
+`enhanced-mode: fake-ip` 会给域名返回 `198.18.0.0/15` 的假地址。这对浏览器/curl 透明，但**自带 SSRF 防护的客户端会把 `198.18.x` 判为「非公网」而直接拒绝**。实测 ollama 拉模型时：
+
+```
+Error: redirect target not allowed: dd20bb891979d25aebc8bec07b2b3bbc.r2.cloudflarestorage.com resolves to non-public 198.18.4.206
+```
+
+注意：这**与走哪个节点无关**（换 `🚀 PROXY`、换手工节点都一样报），因为报错发生在客户端解析阶段，连接还没建立。
+
+**解法**：把这些域名加进 mihomo 的 `fake-ip-filter`（列进去的域名返回**真实 IP**）。OpenClash 的自定义入口：
+
+| 项 | 值 |
+|---|---|
+| UCI 开关 | `openclash.config.custom_fakeip_filter='1'`（本机已开） |
+| 模式 | `openclash.config.custom_fakeip_filter_mode='blacklist'` |
+| 清单文件 | `/etc/openclash/custom/openclash_custom_fake_filter.list`（每行一个域名，`#` 注释） |
+| 消费方 | `yml_change.sh:723` 合并进 `dns.fake-ip-filter` |
+
+```sh
+ssh root@<router> '
+  F=/etc/openclash/custom/openclash_custom_fake_filter.list
+  cp "$F" "$F.bak-$(date +%Y%m%d-%H%M%S)"
+  printf "\n# ollama/R2\n+.r2.cloudflarestorage.com\n+.cloudflarestorage.com\n+.ollama.ai\n" >> "$F"
+  /etc/init.d/openclash restart
+  grep -nE "cloudflarestorage|ollama" /etc/openclash/base.yaml'   # 应出现在 fake-ip-filter 段
+```
+
+验证：查这些域名应返回**真实公网 IP**（非 `198.18.x`）：
+
+```sh
+ssh root@<router> 'nslookup registry.ollama.ai | tail -3'
+```
+
+客户端若已缓存过假地址，需等 TTL 或重启客户端/容器再重试。同类软件（任何做 SSRF/redirect 校验的 Go/Rust 程序，如 docker/podman 拉镜像、部分 CLI）遇到 `resolves to non-public` 都可照此处理。
+
 ## 升级（OpenWrt / OpenClash）
 
 刷固件或升级 OpenClash 前**务必先读这一节**。这台设备上没有 `opkg`，ruby 与 OpenClash 都是**镜像内置**，所以升级等于换镜像，`/usr` 会被整个替换。
