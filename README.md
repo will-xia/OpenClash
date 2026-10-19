@@ -226,6 +226,28 @@ PY'
 
 两处改动都在 `/etc` 下，换镜像升级后保留：`openclash_custom_hosts.list`、`/etc/config/openclash`（`custom_host`）、`/etc/config/dhcp`（`rebind_domain`）。
 
+### 四个实测陷阱（2026-10-19 全量刷机重排时验证）
+
+**1. mihomo 只认配置顶层的 `hosts:`（内核 alpha-smart-gdaf3ad0 实测）**。把条目嵌进 `dns.hosts:`（即使 `use-hosts: true`）后，clash 直查 7874 仍返回 fake-ip；合并到**顶层** `hosts:` 时返回真实 IP。`yml_change.sh` 原生就是合并到顶层的 —— **不要为了「更规范」把它挪进 dns 段**（试过，是负优化）。
+
+**2. dnsmasq `address=` 本地直答（双保险，已保留）**。让 dnsmasq 对该域名直接返回内网 IP、完全不经 clash，clash 配置即使丢/坏也不影响在家使用：
+
+```sh
+ssh root@<router> '
+  uci add_list dhcp.@dnsmasq[0].address="/home.weixia.de5.net/192.168.10.168"
+  uci commit dhcp
+  /etc/init.d/dnsmasq restart'
+```
+
+**3. 调测期切忌信 Mac 本机 `nslookup`**。Mac 常驻 TUN 代理工具（默认路由是 `utunN`、解析器 `198.18.0.2`），它返回的 fake-ip 是**本机工具**的，与路由器无关 —— 2026-10-19 整个排障日的 fake-ip 迷惑皆源于此，路由器侧机制当时一直是好的。定向验证必须显式指定服务器：
+
+```sh
+dig +short @192.168.10.2 home.weixia.de5.net          # dnsmasq 路径 → 期望 192.168.10.168
+dig +short @192.168.10.2 -p 7874 home.weixia.de5.net  # clash 直查   → 期望 192.168.10.168
+```
+
+**4. Quick Start 会静默跳过重生成**。UCI 无变化时 restart 走 `Quick Start Mode, Skip Modify The Config File`，直接复用旧 base.yaml —— 刚改完覆写条目重启可能看到的还是旧文件。强制重生成：先改任意一个 UCI 值（如把 `log_size` 在 1024/2048 间改一下）再 restart，日志出现「Pause quick start」才算真跑了 Step 3。
+
 ## fake-ip 与「拒绝非公网地址」的客户端
 
 `enhanced-mode: fake-ip` 会给域名返回 `198.18.0.0/15` 的假地址。这对浏览器/curl 透明，但**自带 SSRF 防护的客户端会把 `198.18.x` 判为「非公网」而直接拒绝**。实测 ollama 拉模型时：
@@ -261,6 +283,8 @@ ssh root@<router> 'nslookup registry.ollama.ai | tail -3'
 ```
 
 客户端若已缓存过假地址，需等 TTL 或重启客户端/容器再重试。同类软件（任何做 SSRF/redirect 校验的 Go/Rust 程序，如 docker/podman 拉镜像、部分 CLI）遇到 `resolves to non-public` 都可照此处理。
+
+**国内主流域名不用手动加**：`china_ip_route≠0` 时 `yml_change.sh:749` 会自动往 fake-ip-filter 追加 `rule-set:oc-cn-domain`（默认 `china_ip_route_domain_source='mrs'`；改成 `'geosite'` 才是 `geosite:cn`），cn 域名一律返回真 IP。所以需要手动维护的只有**境外域名里需要真 IP 的一小撮**（对象存储、内网自托管域名等）。
 
 ## 分流规则：让某个地址走代理或不走代理
 
@@ -384,6 +408,8 @@ uci get openclash.config.enable      # 必须是 1
 
 配置、订阅清单、手动节点、覆写模块、采集器的全部历史数据都在保留范围内。
 
+> **上表只对 sysupgrade（保留配置升级）成立。全新刷机（换镜像）连 `/etc` 一起丢** —— 2026-10-19 实测：`/etc/ytwatch` 历史数据从零、`/etc/config/{openclash,dhcp}`、custom 条目全部清零，只剩仓库源文件可重灌；且面板/API secret 回到出厂值，而 `quota_logger.rb` 是启动时一次性读 `base.yaml` 里的 secret —— **重装后必须重启 ytwatch**，否则一直 401（症状极误导：日志报「JSON 缺 connections 数组」的 shape 错误，实为鉴权失败）。
+
 ### 一定会丢的
 
 `/usr/lib/ruby/site_ruby/<版本>/json.rb` —— 手工放入的 JSON shim，`/usr` 下没有任何 keep.d 条目。
@@ -408,6 +434,54 @@ git pull
 tools/ruby-json/install.sh root@<router>   # ① 补回 json shim
 tools/ytwatch/install.sh  root@<router>    # ② 重装采集器
 ```
+
+（**全新刷机**额外两步：`echo '+ /etc/ytwatch/' > /lib/upgrade/keep.d/ytwatch` 重建保留条目；覆写模块若用 UCI 脚本注册，`config` 选项必须是**列表** —— `uci add_list openclash.$sid.config="all"`，若写成字符串（`uci set`）会被 `config_list_foreach` 静默跳过，模块不生效且无任何报错。）
+
+### 重装后的设置分工：UI 能做什么、哪些只能 SSH
+
+OpenClash 的核心改造文件都在 `/etc` 下，部分设置没有 UI 入口。按这个顺序做（UI 操作认字根即可，中文标签随版本略有出入，不确定时用右侧 UCI 等价命令，结果一致）：
+
+**① SSH 重灌文件（无 UI 入口，一次性）**
+
+```sh
+scp README同目录/{base.yaml,full_rules_only.conf,node_sources.conf} \
+    root@<router>:/etc/openclash/   # 再分别移入 config/ overwrite/ overwrite/
+scp update.sh subscriptions.txt  root@<router>:/etc/openclash/aggregator/ && chmod 600 subscriptions.txt
+scp manual_nodes.yaml            root@<router>:/etc/openclash/proxy_provider/
+git pull && tools/ruby-json/install.sh root@<router>   # json shim
+tools/ytwatch/install.sh  root@<router>
+echo '+ /etc/ytwatch/' > /lib/upgrade/keep.d/ytwatch   # 全新刷机时
+```
+
+**② UI 里要点的开关**
+
+| 设置项 | LuCI 位置 | UCI 等价 |
+|---|---|---|
+| 选主配置 | OpenClash 主页 →「配置文件」下拉选 `base.yaml` | `config_path` |
+| 启用覆写模块 | 全局设置 →「覆写设置」→ 勾选两个 conf | `uci add_list openclash.$sid.config="all"`（必须列表） |
+| 自定义 Hosts | 全局设置 →「模式设置/自定义规则」→ 启用自定义 Host 条目 | `custom_host='1'` |
+| fake-ip 过滤 | 同页「自定义 Fake-IP 过滤」+ 过滤模式 blacklist | `custom_fakeip_filter='1'`、`_mode='blacklist'` |
+| GeoIP 自定义更新 | 全局设置 →「云端更新」 | `enable_geoip_dat='0'`（overlay 余量大时可不管） |
+| rebind 白名单 | 网络 → DHCP/DNS → 高级设置 → 重绑白名单 加 `home.weixia.de5.net` | `uci add_list dhcp.@dnsmasq[0].rebind_domain=…` |
+| 计划任务 | 系统 → 计划任务末尾加行 | 见下 |
+
+计划任务内容：
+
+```
+0 */6 * * * /etc/openclash/aggregator/update.sh >> /etc/openclash/aggregator/update.log 2>&1
+```
+
+**③ 只有 UCI/SSH 能做的**
+
+```sh
+# dnsmasq 本地直答（双保险，UI 没有该字段）
+ssh root@<router> 'uci add_list dhcp.@dnsmasq[0].address="/home.weixia.de5.net/192.168.10.168"
+  uci commit dhcp && /etc/init.d/dnsmasq restart'
+```
+
+custom 条目文件（`openclash_custom_hosts.list` / `openclash_custom_fake_filter.list`）可在 UI「配置文件」页直接编辑，也可照本章前文的 scp/printf 流程。
+
+**④ 启动与验证**：主页一键启动 → 日志见两行 `Processing Overwrite Module` 且无 `Quick Start Mode, Skip Modify...`（若有，随改一个 UCI 值再重启强制全量重生成）→ DNS 双路径 `dig +short @192.168.10.2 home.weixia.de5.net` 与 `dig +short @192.168.10.2 -p 7874 home.weixia.de5.net` 都应返回 `192.168.10.168`（顺带见「内网 DNS 覆盖」章的排查表）→ 再跑下面的逐项验证。
 
 ### 升级后：逐项验证
 
