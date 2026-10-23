@@ -355,6 +355,96 @@ for c in json.load(sys.stdin).get("connections",[]):
 - 本机 **sniffer 已开**（`sniffer.enable: true`、`override-destination: true`），mihomo 从 TLS SNI 还原域名，所以即使目标被 `fake-ip-filter` 解析成真实 IP，`DOMAIN-*` 规则照样命中。纯 IP、无 SNI 的连接只能靠 `IP-CIDR` 规则。
 - fake-ip 模式下，被规则判定为直连的域名，客户端拿到的**仍是 `198.18.x`**（除非该域名同时在 `fake-ip-filter` 里）。所以对「拒绝非公网地址」的客户端（如 ollama，见上一节），要**同时**做两件事：域名进 `fake-ip-filter`（拿真实 IP）+ 加 `DIRECT` 规则。
 
+## 手动节点：新增、部署与排障（2026-10-23 实测）
+
+### 新增节点并部署
+
+模板见 `manual_nodes.examples.yaml`（VLESS Reality Vision 是第一个示例）。Vision 必须 `network: tcp` + `flow: xtls-rprx-vision`，且服务端该用户也要开 `flow`。部署前三查：
+
+```sh
+grep -n REPLACE manual_nodes.yaml                     # 应无输出（name 里的 REPLACE_NAME 也算）
+ruby -ryaml -e 'n=YAML.load_file("manual_nodes.yaml")["proxies"].map{|p|p["name"]}; puts "#{n.size}/#{n.uniq.size}"'   # 两数相等 = 无重名
+ssh root@<router> 'md5sum /etc/openclash/proxy_provider/manual_nodes.yaml'; md5 -q manual_nodes.yaml   # 确认真有改动
+```
+
+重名节点（复制模板忘改 `name`）会让 provider 加载失败或节点被吞；当天实测就出过 3 个同名 Vision 节点 + 1 个重复的 AnyTLS。
+
+```sh
+scp -O manual_nodes.yaml root@<router>:/etc/openclash/proxy_provider/
+ssh root@<router> 'chmod 600 /etc/openclash/proxy_provider/manual_nodes.yaml; /etc/openclash/aggregator/update.sh'
+# 不重启内核，直接让 file provider 重读
+ssh root@<router> 'S=$(sed -n "s/^secret:[[:space:]]*//p" /etc/openclash/base.yaml | tr -d "\"'"'"' ");
+  curl -s -X PUT -H "Authorization: Bearer $S" http://127.0.0.1:9090/providers/proxies/manual_nodes -w "%{http_code}\n"'   # 204 = 成功
+```
+
+`update.sh` 报 `Already running (or stale lock)` 时，先 `ps w | grep '[u]pdate\.sh'` 确认没有在跑的实例，再 `rmdir /etc/openclash/aggregator/.update.lock`。
+
+### 单节点测速：走 provider 的 healthcheck，不走 /proxies
+
+provider 里的节点**不一定**出现在全局 `/proxies/{name}`（返回 `Resource not found`）。要用 provider 自己的接口（名字要 URL 编码）：
+
+```sh
+U=http://127.0.0.1:9090/providers/proxies/manual_nodes
+curl -s -H "Authorization: Bearer $S" "$U/%5BSelf%5D%20Oracle-VLESS-Reality-Vision/healthcheck?timeout=8000&url=https://www.gstatic.com/generate_204"
+```
+
+**必须同时用两个 URL 测**：`https://www.gstatic.com/generate_204`（与 provider health-check 一致）和 `http://cp.cloudflare.com/generate_204`。「gstatic 失败、cloudflare 通」= 客户端参数和链路都对，问题在**服务端对 Google 域名的路由**（见下文）。
+
+### 2026-10-23 Oracle 节点（`<oracle-ip>` / `<oracle-domain>`）测速
+
+修复后（`www.gstatic.com`）：
+
+| 节点 | 延迟 |
+|---|---|
+| `[Self] Oracle-VLESS-Reality-Vision` | 182–197 ms |
+| `[Self] Oracle-HY2-TLS` | 186–191 ms（服务端重启后首测失败，之后稳定） |
+| `[Self] Oracle-TUIC-TLS` | 169 ms |
+| `[Self] Oracle-ANYTLS` | 169 ms |
+
+同日新增的其余 Vision 节点：`[Self] BWG-VLESS-Reality-Vision` 144 ms、`[Self] AWSjp-VLESS-Reality-Vision` 147 ms、`[Self] AWSsg-VLESS-Reality-Vision` 212 ms。
+
+### 踩过的坑：v2ray-agent sing-box 缺 `01_direct_outbound`
+
+**现象**：同一台服务器上 Vision / HY2 / TUIC / AnyTLS **四种协议**用 gstatic 测**全部失败**，路由器内核日志无任何报错；换 cloudflare 测速则全部正常。
+
+**根因**：v2ray-agent 生成的分片 `config/cn_01_google_play_route.json` 把 `googleapis.cn / googleapis.com / gstatic.com` 路由到 `01_direct_outbound`，但配置里**没有定义这个出站**（原 `config.json` 甚至没有 `outbounds` 段，靠的是 sing-box 内置默认直连）。认证全部通过后，连接死在：
+
+```
+router: match[0] domain_regex=[...gstatic.com] => route(01_direct_outbound)
+ERROR router: outbound not found: 01_direct_outbound
+```
+
+**排查顺序**（每步排除一层，别跳）：
+
+| 步骤 | 命令 / 证据 | 排除的 |
+|---|---|---|
+| 1 | 本机 `nc -z` 端口 + `openssl s_client -servername <SNI>` 拿到目标站真证书 | 端口、Reality dest / serverNames |
+| 2 | 服务器上 `curl -sI https://www.gstatic.com/generate_204` 返回 204 | 服务器出站 |
+| 3 | `systemctl list-units --state=running \| grep sing` + `ss -lntup` | 进程与监听（本例服务名是 `sing-box`，不是 `xray`） |
+| 4 | `journalctl -u sing-box` 里 `ClientShortId`、`hs.handshake() err: <nil>`、`[<uuid>-…] inbound connection to …` | short-id、公钥、uuid、flow —— 全过则客户端参数无罪 |
+| 5 | 同一段日志里紧随其后的 `router:` / `ERROR` 行 | 定位到服务端路由 |
+
+**修复**（服务器上，sudo）：sing-box 只读合并后的 `conf/config.json`（`ExecStart=… run -c /etc/v2ray-agent/sing-box/conf/config.json`），**只在分片里补出站、只重启服务，不会生效**——必须重新合并。
+
+```sh
+cd /etc/v2ray-agent/sing-box/conf; SB=/etc/v2ray-agent/sing-box/sing-box
+echo '{"outbounds":[{"type":"direct","tag":"01_direct_outbound"}]}' > config/01_direct_outbound.json
+$SB merge /tmp/sb-merged.json -C config/
+diff <(jq -S . config.json) <(jq -S . /tmp/sb-merged.json)   # 应只多出这一个 outbounds 段
+$SB check -c /tmp/sb-merged.json
+cp -p config.json config.json.bak.$(date +%Y%m%d%H%M) && install -m 644 /tmp/sb-merged.json config.json
+systemctl restart sing-box
+grep -n 01_direct_outbound config.json                        # 必须两行：tag 定义 + 路由引用
+```
+
+注意：
+
+- 先合并到临时文件并 `diff`，确认 `config.json` 没有分片之外的内容会被合并冲掉，再替换。
+- 当日备份：`config.json.bak.202610230857`。回滚 = 拷回并 `systemctl restart sing-box`。
+- 用 v2ray-agent 菜单重装或重做分流时可能重新生成路由分片、删掉 `01_direct_outbound.json`，问题会复发。复发的特征就是上面的「gstatic 失败、cloudflare 通」。
+- 附带现象：修复前旧进程的 HY2 / TUIC / AnyTLS 监听已失效（`ss` 仍显示在监听，但日志里没有任何入站记录），重启 sing-box 后恢复。只有 VLESS 有日志、其他协议日志全空时，先重启一次服务再测。
+- 登录：`ssh -i ~/.ssh/<oracle-key> ubuntu@<oracle-ip>`（只能用 `ubuntu`，`root` / `opc` 会被拒）。
+
 ## 升级（OpenWrt / OpenClash）
 
 刷固件或升级 OpenClash 前**务必先读这一节**。这台设备上没有 `opkg`，ruby 与 OpenClash 都是**镜像内置**，所以升级等于换镜像，`/usr` 会被整个替换。
@@ -482,6 +572,24 @@ ssh root@<router> 'uci add_list dhcp.@dnsmasq[0].address="/home.weixia.de5.net/1
 custom 条目文件（`openclash_custom_hosts.list` / `openclash_custom_fake_filter.list`）可在 UI「配置文件」页直接编辑，也可照本章前文的 scp/printf 流程。
 
 **④ 启动与验证**：主页一键启动 → 日志见两行 `Processing Overwrite Module` 且无 `Quick Start Mode, Skip Modify...`（若有，随改一个 UCI 值再重启强制全量重生成）→ DNS 双路径 `dig +short @192.168.10.2 home.weixia.de5.net` 与 `dig +short @192.168.10.2 -p 7874 home.weixia.de5.net` 都应返回 `192.168.10.168`（顺带见「内网 DNS 覆盖」章的排查表）→ 再跑下面的逐项验证。
+
+### 定时重启旁路由：开机自启竞速与故障自禁用（2026-10-21 实测）
+
+本机是**每例 04:01 自动重启的旁路由**（LuCI 定时重启插件：`1 4 * * * … reboot`）。重启后 OpenClash 的 `boot()` 在 netifd 布网未完时立刻尝试启动，Step 6 的 LAN IP 就绪探测拿不到合法 IP → 触发 `start_fail()`（`init.d:368`）**自我禁用**（`enable=0` + stop）—— 这是设计行为，但结果是整天无代理且**无任何自动恢复通道**（`update.sh` 只更新 provider 不重启；geo cron 是启动成功才装的；watchdog 随服务同退；busybox 无 `@reboot`）。手工恢复时看到的 `enable=0` 即这条路径写的，不是谁手点关的。
+
+**双层修复（均已生效）**：
+
+```sh
+# 第一层：boot() 先睡 30s 等 LAN 就绪（init.d 原生支持）
+uci set openclash.config.delay_start=30; uci commit openclash
+```
+
+```sh
+# 第二层 /etc/openclash/aggregator/bootguard.sh：04:02 拉起失败者的确定性兜底
+2 4 * * * /bin/sh /etc/openclash/aggregator/bootguard.sh >/dev/null 2>&1 #clash-bootguard
+```
+
+bootguard 要点：`sleep 60` 后用 `ubus call service list` + `jsonfilter` 判断 openclash instance 是否 running；不是则强制 `enable=1` + restart。代价是极端情况下用户前一晚主动停用 OpenClash，次日凌晨也会被拉起 —— 想停用时同步注释该 cron 行即可（`#clash-bootguard` 标记）。服务正常时该脚本验证为 no-op。
 
 ### 升级后：逐项验证
 
